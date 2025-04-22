@@ -1,5 +1,9 @@
 streamlit
 openai
 python-dotenv
-pypdf2
+PyPDF2
 python-docx
+# requests # Included in case genai needs it in future, though not used now
+# pandas # Included in case genai needs it in future, though not used now
+# beautifulsoup4 # Included in case genai needs it in future, though not used now
+# moviepy # Removed as video processing is not needed

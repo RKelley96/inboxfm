@@ -1,0 +1,23 @@
+# Ignore environment variables file
+.env
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore virtual environment folders (if you use one)
+venv/
+env/
+.venv/
+*.venv
+
+# Ignore IDE/editor specific files (optional but good practice)
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Ignore Streamlit specific files (optional)
+.streamlit/

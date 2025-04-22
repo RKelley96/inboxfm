@@ -1,442 +1,366 @@
-# app.py
 import streamlit as st
 import os
 import tempfile
 import uuid
+import logging
 from pathlib import Path
-import time
-import traceback
+import base64 # Import base64 library
 
-# --- Attempt to import utility functions ---
+# Import functions from our utility script
+# Ensure utils.py and genai.py are in the same directory
 try:
-    if not os.path.exists("utils.py"):
-        utils_found = False
-    else:
-        from utils import read_uploaded_files, generate_script_and_audio
-        utils_found = True
-except ImportError as import_err:
-    utils_found = False
-    if os.path.exists("utils.py"):
-        def read_uploaded_files(files):
-            st.error(f"Import Error: {import_err}. Check `read_uploaded_files` in utils.py.")
-            raise NotImplementedError("`read_uploaded_files` missing/broken.")
-        def generate_script_and_audio(texts, instructions, duration, audio_path, voice):
-            st.error(f"Import Error: {import_err}. Check `generate_script_and_audio` in utils.py.")
-            raise NotImplementedError("`generate_script_and_audio` missing/broken.")
+    from utils import read_uploaded_files, generate_podcast_script, generate_podcast_audio
+except ImportError:
+    st.error("Failed to import required modules. Make sure 'utils.py' and 'genai.py' are in the correct directory.")
+    st.stop() # Stop execution if imports fail
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# --- Constants ---
+# Directory to store generated audio files, relative to the app script
+AUDIO_DIR = "audio_output"
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="Inbox.fm Podcast Generator",
+    page_title="Inbox.fm - Your Newsletter Podcast",
     page_icon="🎙️",
     layout="wide"
 )
 
-# --- Custom CSS Styling (Enhanced Look) ---
+# --- Custom CSS Styling ---
 st.markdown("""
 <style>
-    /* Base & Fonts */
-    body {
-        font-family: 'Inter', sans-serif;
-        background-color: #f4f7f6; /* Lighter, slightly greenish background */
-    }
-    /* Add Inter font from Google Fonts */
-    @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap)');
-
-    /* Headers */
+    /* Main header style */
     .main-header {
-        font-size: 2.6rem;
-        font-weight: 700;
-        color: #2c3e50; /* Dark slate blue */
+        font-size: 2.5rem; /* Larger font size */
+        font-weight: bold;
+        color: #2E3B4E; /* Dark blue-gray color */
         text-align: center;
-        padding-top: 2rem;
-        margin-bottom: 2rem;
-        letter-spacing: -0.5px; /* Tighter letter spacing */
-    }
-    .section-header {
-        font-size: 1.3rem; /* Slightly smaller */
-        font-weight: 600;
-        color: #3498db; /* Brighter blue */
-        margin-top: 1.5rem; /* Reduced top margin */
-        margin-bottom: 0.8rem;
-        border: none; /* Remove border */
-        padding-bottom: 0;
-    }
-    .info-text {
-        font-size: 0.9rem;
-        color: #566573; /* Medium grey-blue */
         margin-bottom: 1rem;
-        line-height: 1.5;
     }
-    label.input-label { /* Custom class for labels */
-        font-size: 0.95rem;
-        font-weight: 500;
-        color: #495057; /* Dark grey */
-        margin-bottom: 0.3rem;
-        display: block;
+    /* Sub-header style */
+    .sub-header {
+        font-size: 1.5rem;
+        font-weight: bold;
+        color: #4A5568; /* Medium gray */
+        margin-top: 1.5rem;
+        margin-bottom: 0.5rem;
+        border-bottom: 2px solid #E2E8F0; /* Light gray border */
+        padding-bottom: 0.3rem;
     }
-
-    /* Input Area Styling */
-    .stApp > header { /* Hide Streamlit's default header */
-        background-color: transparent;
+    /* Informational text style */
+    .info-text {
+        font-size: 1rem;
+        color: #718096; /* Lighter gray */
+        text-align: center;
+        margin-bottom: 2rem;
     }
-    div[data-testid="stVerticalBlock"] { /* Target the main containers */
-        border-radius: 12px; /* Rounded corners for sections */
-        padding: 1.5rem 2rem; /* Add padding */
-        background-color: #ffffff; /* White background for cards */
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); /* Subtle shadow */
-        margin-bottom: 1.5rem; /* Space between cards */
-    }
-    /* Ensure columns don't have double background/padding */
-     div[data-testid="stHorizontalBlock"] > div[data-testid="stVerticalBlock"] {
-         background-color: transparent;
-         box-shadow: none;
-         padding: 0;
-         border-radius: 0;
-         margin-bottom: 0;
-     }
-
-
-    /* Buttons */
+    /* Style Streamlit buttons */
     .stButton>button {
-        background-color: #3498db; /* Brighter blue */
+        background-color: #4299E1; /* Blue background */
         color: white;
-        font-weight: 600; /* Bolder text */
-        border-radius: 8px;
-        padding: 0.7rem 1.5rem;
+        font-weight: bold;
+        border-radius: 0.5rem; /* Rounded corners */
         border: none;
-        transition: all 0.2s ease;
-        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-        width: 100%;
-        margin-top: 1rem; /* Consistent spacing */
+        padding: 0.6rem 1.2rem;
+        transition: background-color 0.3s ease; /* Smooth hover effect */
     }
     .stButton>button:hover {
-        background-color: #2980b9; /* Darker blue */
-        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
-        transform: translateY(-2px);
+        background-color: #2B6CB0; /* Darker blue on hover */
     }
-    .stButton>button:disabled {
-        background-color: #aeb6bf; /* Grey disabled */
-        color: #e9ecef;
-        cursor: not-allowed;
-        box-shadow: none;
-        transform: none;
+    /* Style the file uploader */
+    .stFileUploader label {
+        font-weight: bold;
+        color: #4A5568;
     }
-    .stDownloadButton>button {
-        background-color: #2ecc71; /* Bright green */
-        border: none;
+    /* Center elements like audio player and download button */
+    /* Target the custom HTML audio player */
+    .audio-container, div[data-testid="stDownloadButton"] {
+       display: flex;
+       justify-content: center;
+       margin-top: 1rem;
+       flex-direction: column; /* Stack player and download */
+       align-items: center;
     }
-    .stDownloadButton>button:hover {
-        background-color: #28b463; /* Darker green */
+    .audio-container audio {
+        width: 80%; /* Adjust width as needed */
+        margin-bottom: 1rem; /* Space between player and download button */
     }
-
-    /* Radio Buttons (Horizontal & Themed) */
-    div[role="radiogroup"] {
-        display: flex;
-        flex-wrap: nowrap; /* Prevent wrapping */
-        gap: 8px; /* Space between buttons */
-        justify-content: flex-start; /* Align left */
-        margin-bottom: 1rem;
-        overflow-x: auto; /* Allow horizontal scroll on small screens if needed */
-        padding-bottom: 5px; /* Space for scrollbar if it appears */
+    div[data-testid="stDownloadButton"] button {
+       background-color: #48BB78; /* Green background */
+       width: auto; /* Adjust width automatically */
     }
-    div[role="radiogroup"] label { /* Style individual radio items */
-      background-color: #f1f3f5; /* Very light grey */
-      padding: 6px 12px; /* Smaller padding */
-      border-radius: 20px; /* Pill shape */
-      border: 1px solid #dee2e6;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      font-weight: 500;
-      font-size: 0.85rem; /* Smaller font */
-      color: #495057;
-      white-space: nowrap; /* Keep text on one line */
-    }
-    div[role="radiogroup"] label:hover {
-      background-color: #e9ecef;
-      border-color: #adb5bd;
-    }
-    div[role="radiogroup"] input[type="radio"]:checked + div label{
-       background-color: #3498db; /* Blue selected */
-       color: white;
-       border-color: #2980b9;
-       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-    }
-
-
-    /* Inputs & Widgets */
-    .stTextArea textarea,
-    .stSelectbox div[data-baseweb="select"] > div {
-        border-radius: 8px;
-        border: 1px solid #dee2e6;
-        background-color: #f8f9fa; /* Match page background */
-        font-size: 0.9rem;
-        padding: 0.5rem 0.75rem;
-    }
-    .stFileUploader {
-        border: none; /* Remove default border */
-        padding: 0;
-    }
-    .stFileUploader label { /* Remove the dashed box */
-        border: none;
-        background-color: transparent;
-        padding: 0;
-        text-align: left; /* Align label text left */
-        color: #495057; /* Standard text color */
-        font-weight: 500;
-    }
-    .stFileUploader label span { /* Target the text span */
-        font-size: 0.95rem;
-    }
-    .stFileUploader ul { /* Style the uploaded file list */
-        margin-top: 0.5rem;
-    }
-
-    .stExpander {
-        border: 1px solid #e9ecef; /* Lighter border */
-        border-radius: 8px;
-        background-color: #f8f9fa; /* Match background */
-        margin-top: 1rem;
-        box-shadow: none; /* Remove shadow */
-    }
-    .stExpander header {
-        font-weight: 500; /* Medium weight */
-        color: #495057;
-        font-size: 0.95rem;
-        padding: 0.6rem 1rem; /* Adjust padding */
-        background-color: #f1f3f5; /* Header background */
-        border-bottom: 1px solid #e9ecef;
-    }
-    .stExpander div[data-testid="stExpanderDetails"] { /* Content area */
-        padding: 0.5rem 1rem 1rem 1rem; /* Adjust padding */
-    }
-    .stExpander div[data-testid="stExpanderDetails"] .stTextArea textarea {
-        background-color: #fff; /* White background for script */
-        font-size: 0.85rem;
-    }
-
-    /* Alerts */
-    .stAlert {
-        border-radius: 8px;
-        font-size: 0.9rem;
-        padding: 0.8rem 1rem;
-    }
-    .stAlert strong {
-         font-weight: 600;
-    }
-    .success-text {
-        color: #155724;
-        background-color: #d4edda;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-        border-left: 5px solid #28a745;
-        font-weight: 500;
+    div[data-testid="stDownloadButton"] button:hover {
+       background-color: #38A169; /* Darker green on hover */
     }
 
 </style>
 """, unsafe_allow_html=True)
 
-
 # --- Session State Initialization ---
-if 'temp_dir' not in st.session_state:
-    st.session_state.temp_dir = tempfile.mkdtemp(prefix=f"inboxfm_{uuid.uuid4()}_")
-if 'newsletter_text' not in st.session_state:
-    st.session_state.newsletter_text = None
-if 'podcast_script' not in st.session_state:
-    st.session_state.podcast_script = None
-if 'audio_file_path' not in st.session_state:
-    st.session_state.audio_file_path = None
-if 'is_processing' not in st.session_state:
-    st.session_state.is_processing = False
-if 'last_error' not in st.session_state:
-    st.session_state.last_error = None
+# Initialize session state variables if they don't exist
+# This helps maintain state across user interactions
 if 'session_id' not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
-if 'upload_key' not in st.session_state:
-    st.session_state.upload_key = 0
-if 'selected_voice' not in st.session_state:
-    st.session_state.selected_voice = "nova"
-if 'selected_duration' not in st.session_state: # New state for duration
-    st.session_state.selected_duration = None # Default to None (auto)
+    # Use OS temp dir ONLY for temporary storage during file reading
+    st.session_state.temp_dir_read = tempfile.mkdtemp()
+    logging.info(f"Created temporary directory for file reading: {st.session_state.temp_dir_read}")
+    # Ensure the dedicated audio output directory exists
+    if not os.path.exists(AUDIO_DIR):
+        os.makedirs(AUDIO_DIR)
+        logging.info(f"Created audio output directory: {AUDIO_DIR}")
 
-
-# --- Helper Functions ---
-def reset_app_state():
-    """Resets the session state variables related to a processing run."""
-    st.session_state.newsletter_text = None
+if 'combined_text' not in st.session_state:
+    st.session_state.combined_text = None
+if 'podcast_script' not in st.session_state:
     st.session_state.podcast_script = None
-    st.session_state.audio_file_path = None
+# Store the relative path for web access and the full path for file operations
+if 'audio_relative_path' not in st.session_state:
+     st.session_state.audio_relative_path = None # Keep for potential future use? Or remove? Let's keep for now.
+if 'audio_full_path' not in st.session_state:
+    st.session_state.audio_full_path = None
+if 'is_processing' not in st.session_state:
     st.session_state.is_processing = False
-    st.session_state.last_error = None
-    st.session_state.session_id = str(uuid.uuid4())
-    st.session_state.upload_key += 1
-    st.session_state.selected_duration = None # Reset duration on start over
+if 'error_message' not in st.session_state:
+    st.session_state.error_message = None
+if 'read_files_list' not in st.session_state:
+    st.session_state.read_files_list = []
+if 'failed_files_list' not in st.session_state:
+    st.session_state.failed_files_list = []
 
-# --- App Header ---
-st.markdown('<div class="main-header">Inbox.fm 🎙️</div>', unsafe_allow_html=True)
+# --- Helper Function ---
+def reset_state():
+    """Resets the session state for a new podcast generation."""
+    st.session_state.combined_text = None
+    st.session_state.podcast_script = None
+    st.session_state.audio_relative_path = None
+    st.session_state.audio_full_path = None
+    st.session_state.is_processing = False
+    st.session_state.error_message = None
+    st.session_state.read_files_list = []
+    st.session_state.failed_files_list = []
+    # Note: We are not cleaning up the AUDIO_DIR here for simplicity,
+    # but in a production app, you'd want a cleanup strategy.
+    logging.info("Session state reset.")
 
-if not utils_found:
-    st.error("🚨 **Critical Setup Error:** `utils.py` not found or missing functions. Core functionality disabled.", icon="⚙️")
+# --- Main Application UI ---
 
-# --- Main Layout Columns ---
-col1, col2 = st.columns([3, 2]) # Input: 60%, Output: 40% approx
+# Header
+st.markdown('<div class="main-header">🎙️ Inbox.fm</div>', unsafe_allow_html=True)
+st.markdown('<div class="info-text">Transform your newsletters into personalized podcasts.</div>', unsafe_allow_html=True)
 
-# --- Input Column (col1) ---
+# Check for API Key early
+if not os.getenv("OPENAI_API_KEY"):
+    st.error("🚨 OpenAI API Key not found. Please set the OPENAI_API_KEY environment variable (e.g., in a .env file) and restart the app.")
+    st.stop()
+
+# Layout Columns
+col1, col2 = st.columns([2, 1]) # Input column wider than output
+
 with col1:
-    with st.container(): # Wrap inputs in a container for styling
-        # --- Step 1: Upload ---
-        st.markdown('<div class="section-header">1. Upload Newsletters</div>', unsafe_allow_html=True)
-        uploaded_files = st.file_uploader(
-            "Select or drag & drop files (.txt, .pdf, .docx)", # More inviting label
-            type=["txt", "pdf", "docx"],
-            accept_multiple_files=True,
-            key=f"newsletter_uploader_{st.session_state.upload_key}",
-            disabled=not utils_found,
-            label_visibility="collapsed" # Hide default label, use markdown header instead
+    st.markdown('<div class="sub-header">Step 1: Upload Newsletters</div>', unsafe_allow_html=True)
+    uploaded_files = st.file_uploader(
+        "Select one or more newsletter files (.txt, .pdf, .docx)",
+        type=["txt", "pdf", "docx"],
+        accept_multiple_files=True,
+        key="newsletter_uploader"
+    )
+
+    if uploaded_files:
+        st.success(f"{len(uploaded_files)} file(s) selected. Ready for processing.")
+
+    st.markdown('<div class="sub-header">Step 2: Configure Your Podcast</div>', unsafe_allow_html=True)
+
+    # Instructions Text Area
+    instructions = st.text_area(
+        "Instructions for Podcast Style & Content:",
+        placeholder="e.g., Focus on actionable insights for tech investors. Keep the tone conversational but professional. Mention key company names.",
+        height=100,
+        key="podcast_instructions"
+    )
+
+    # Configuration Options in Columns
+    config_col1, config_col2 = st.columns(2)
+
+    with config_col1:
+        # Length Selection
+        length_option = st.selectbox(
+            "Desired Podcast Length:",
+            options=["Auto", "2 mins", "5 mins", "10 mins"],
+            key="podcast_length"
         )
-        # File processing logic (runs on upload)
-        if uploaded_files and st.session_state.newsletter_text is None and not st.session_state.is_processing:
-             if utils_found:
-                try:
-                    with st.spinner("Reading files..."):
-                        st.session_state.last_error = None
-                        extracted_text = read_uploaded_files(uploaded_files)
-                        st.session_state.newsletter_text = extracted_text
-                        if not extracted_text:
-                             st.warning("⚠️ Could not extract text from uploaded files.")
-                except Exception as e:
-                    st.error(f"Error reading files: {e}")
-                    st.session_state.last_error = f"File Reading Error: {e}"
-                    st.session_state.newsletter_text = None
 
-        # --- Step 2: Customize ---
-        st.markdown('<div class="section-header">2. Customize Podcast</div>', unsafe_allow_html=True)
-
-        # Duration Selection using Radio buttons
-        st.markdown('<label class="input-label">Target Duration (Approximate)</label>', unsafe_allow_html=True)
-        duration_options = {
-            'Default': None, # Represent 'Auto' as None
-            '2 mins': 2,
-            '5 mins': 5,
-            '10 mins': 10
-        }
-        duration_keys = list(duration_options.keys())
-        current_duration_value = st.session_state.selected_duration
-        try:
-            current_index = list(duration_options.values()).index(current_duration_value)
-        except ValueError:
-            current_index = 0 # Default to 'Default'
-
-        selected_duration_label = st.radio(
-            "Select Podcast Length", # Hidden label, but needed for widget
-            options=duration_keys,
-            index=current_index,
-            key="duration_radio",
-            horizontal=True,
-            label_visibility="collapsed"
-        )
-        # Update session state when radio button changes
-        st.session_state.selected_duration = duration_options[selected_duration_label]
-
-
+    with config_col2:
         # Voice Selection
-        st.markdown('<label class="input-label">Voice</label>', unsafe_allow_html=True)
-        voice_options = ["nova", "alloy", "echo", "fable", "onyx", "shimmer", "ash", "ballad", "coral", "sage"]
-        st.selectbox(
-            "Select AI Voice", # Hidden label
-            options=voice_options,
-            index=voice_options.index(st.session_state.selected_voice),
-            key="voice_selector_widget",
-            on_change=lambda: st.session_state.update(selected_voice=st.session_state.voice_selector_widget),
-            disabled=not utils_found,
-            label_visibility="collapsed"
+        voice_option = st.selectbox(
+            "Select AI Voice:",
+            options=["nova", "alloy", "echo", "fable", "onyx", "shimmer"], # Common OpenAI voices
+            key="podcast_voice"
         )
 
-        # Optional Instructions
-        st.markdown('<label class="input-label">Additional Instructions (Optional)</label>', unsafe_allow_html=True)
-        instructions = st.text_area(
-            "Add specific style notes, topics to focus on, etc.", # Hidden label
-            placeholder="Example: Focus on financial implications. Use an enthusiastic tone.",
-            height=100,
-            key="podcast_instructions",
-            disabled=not utils_found,
-            label_visibility="collapsed"
-        )
+    # Generate Button
+    st.markdown("---") # Visual separator
+    generate_button = st.button("✨ Generate Podcast", key="generate_button", use_container_width=True)
 
-        # --- Reset Button ---
-        show_reset = st.session_state.newsletter_text or st.session_state.podcast_script or st.session_state.audio_file_path or st.session_state.last_error
-        if show_reset:
-            if st.button("🔄 Clear & Start Over", key="reset_button", use_container_width=True):
-                reset_app_state()
-                st.rerun()
+# --- Processing Logic ---
+if generate_button and uploaded_files:
+    # Reset previous results before starting
+    reset_state()
+    st.session_state.is_processing = True
+    st.session_state.error_message = None
 
+    # Display spinner context manager
+    with st.spinner("Processing... Reading files, generating script, and creating audio..."):
+        try:
+            # 1. Read Files (using OS temp dir for reading)
+            logging.info("Starting file reading process.")
+            combined_text, read_files, failed_files = read_uploaded_files(uploaded_files, st.session_state.temp_dir_read)
+            st.session_state.combined_text = combined_text
+            st.session_state.read_files_list = read_files
+            st.session_state.failed_files_list = failed_files
+            logging.info(f"Files read. Success: {len(read_files)}, Failed: {len(failed_files)}")
 
-# --- Processing & Output Column (col2) ---
-with col2:
-     with st.container(): # Wrap outputs in a container for styling
-        # --- Step 3: Generate ---
-        st.markdown('<div class="section-header">3. Generate & Listen</div>', unsafe_allow_html=True)
-
-        # Generate Button
-        can_generate = utils_found and st.session_state.newsletter_text and not st.session_state.is_processing
-        if st.button("🚀 Generate Podcast", key="generate_podcast_button", disabled=not can_generate, use_container_width=True):
-            if not st.session_state.newsletter_text:
-                st.warning("Please upload newsletter files first.")
+            # Check if any content was actually read
+            if not combined_text:
+                st.session_state.error_message = "Could not read any content from the uploaded files. Please check the file formats and content."
             else:
-                current_instructions = st.session_state.get("podcast_instructions", "")
-                st.session_state.is_processing = True
-                st.session_state.last_error = None
-                st.session_state.podcast_script = None
-                st.session_state.audio_file_path = None
-                st.rerun()
+                # 2. Generate Script (only if text was read)
+                logging.info("Generating podcast script.")
+                script = generate_podcast_script(combined_text, instructions, length_option)
+                st.session_state.podcast_script = script
+                logging.info("Podcast script generated.")
 
-        # --- Display Area ---
-        if st.session_state.is_processing:
-            # Show spinner centrally in the column
-            with st.spinner("Generating podcast... This may take several moments..."):
-                st.empty() # Placeholder to show spinner while processing happens on next run
+                # 3. Generate Audio (saving to AUDIO_DIR)
+                logging.info(f"Generating podcast audio in directory: {AUDIO_DIR}")
+                # Define filename using session ID to avoid conflicts
+                audio_filename = f"inboxfm_podcast_{st.session_state.session_id}.mp3"
+                # Pass AUDIO_DIR as the output directory
+                # generate_podcast_audio should return the full path to the saved file
+                generated_audio_full_path = generate_podcast_audio(
+                    script_text=script,
+                    output_dir=AUDIO_DIR, # Pass the dedicated audio directory
+                    voice_name=voice_option,
+                    speed=1.0,
+                    filename=audio_filename
+                )
 
-        # Display Error if it occurred
-        if st.session_state.last_error and not st.session_state.is_processing:
-            st.error(f"⚠️ **Error:** {st.session_state.last_error}")
+                # Check if the audio file was actually created and has size > 0
+                if os.path.exists(generated_audio_full_path) and os.path.getsize(generated_audio_full_path) > 0:
+                    st.session_state.audio_full_path = generated_audio_full_path
+                    # Store the relative path just in case, but we won't use it for the player now
+                    st.session_state.audio_relative_path = os.path.join(AUDIO_DIR, audio_filename)
+                    logging.info(f"Podcast audio generated successfully at {st.session_state.audio_full_path}, size: {os.path.getsize(st.session_state.audio_full_path)} bytes")
+                elif os.path.exists(generated_audio_full_path):
+                    st.session_state.error_message = "Audio generation finished, but the audio file is empty (0 bytes)."
+                    logging.error(f"Generated audio file is empty: {generated_audio_full_path}")
+                else:
+                    st.session_state.error_message = "Audio generation finished, but the audio file was not found."
+                    logging.error(f"Audio file path not found after generation attempt: {generated_audio_full_path}")
 
-        # Display Audio Player & Download if successful
-        if st.session_state.audio_file_path and os.path.exists(st.session_state.audio_file_path) and not st.session_state.is_processing:
-            st.markdown('<div class="success-text">✅ Your podcast is ready!</div>', unsafe_allow_html=True)
-            try:
-                 with open(st.session_state.audio_file_path, "rb") as audio_file:
-                     audio_bytes = audio_file.read()
-                 st.audio(audio_bytes, format="audio/mp3")
+        except Exception as e:
+            # Catch any exception during the process
+            logging.error(f"Error during podcast generation: {e}", exc_info=True)
+            st.session_state.error_message = f"An error occurred: {e}"
+            st.session_state.audio_full_path = None # Ensure paths are None on error
+            st.session_state.audio_relative_path = None
+        finally:
+            # Ensure processing state is always turned off
+            st.session_state.is_processing = False
+            # Rerun to update the UI immediately after processing finishes or fails
+            st.rerun()
 
-                 st.download_button(
-                     label="⬇️ Download Podcast (.mp3)",
-                     data=audio_bytes,
-                     file_name=f"Inbox.fm_Podcast_{time.strftime('%Y%m%d_%H%M%S')}.mp3",
-                     mime="audio/mp3",
-                     key="download_button",
-                     use_container_width=True
-                 )
-            except FileNotFoundError:
-                 st.error("Error: Could not find generated audio file.")
-                 st.session_state.audio_file_path = None
-                 st.session_state.last_error = "Audio file missing after generation."
-            except Exception as e:
-                 st.error(f"Error preparing audio: {e}")
-                 st.session_state.audio_file_path = None
-                 st.session_state.last_error = f"Audio display/download error: {e}"
 
-        # Display Script Expander if script exists (even if audio failed)
-        if st.session_state.podcast_script and not st.session_state.is_processing:
-             with st.expander("📄 View Generated Script", expanded=False):
-                  st.text_area("Script:", value=st.session_state.podcast_script, height=300, key="script_display", disabled=True)
+elif generate_button and not uploaded_files:
+    st.warning("Please upload at least one newsletter file.")
 
-        # Initial guidance message
-        if not st.session_state.podcast_script and not st.session_state.audio_file_path and not st.session_state.is_processing and not st.session_state.last_error:
-             st.info("Upload files and click 'Generate Podcast' to begin." if utils_found else "⚙️ Application setup incomplete.")
+# --- Display Results ---
+with col2:
+    st.markdown('<div class="sub-header">Step 3: Listen & Download</div>', unsafe_allow_html=True)
+
+    # Display status of file reading
+    if st.session_state.read_files_list or st.session_state.failed_files_list:
+        with st.expander("File Reading Status", expanded=False):
+            if st.session_state.read_files_list:
+                st.write("**Successfully Read:**")
+                for fname in st.session_state.read_files_list:
+                    st.caption(f"✅ {fname}")
+            if st.session_state.failed_files_list:
+                st.write("**Failed/Skipped:**")
+                for fname in st.session_state.failed_files_list:
+                    st.caption(f"❌ {fname}")
+
+    # Display Error Message if it occurred
+    if st.session_state.error_message:
+        st.error(f"🚨 {st.session_state.error_message}")
+
+    # Display Audio Player and Download Button if audio exists and full path is set
+    if st.session_state.audio_full_path and os.path.exists(st.session_state.audio_full_path):
+        st.success("🎉 Your podcast is ready!")
+
+        # Embed HTML5 Audio Player using Base64 Data URL
+        try:
+            # *** CHANGE HERE: Read bytes, encode to Base64, create Data URL ***
+            with open(st.session_state.audio_full_path, "rb") as f:
+                data = f.read()
+                b64 = base64.b64encode(data).decode() # Decode to string
+                data_url = f"data:audio/mp3;base64,{b64}"
+                logging.info(f"Generated Base64 data URL (length: {len(data_url)}) for {st.session_state.audio_full_path}")
+
+            audio_html = f"""
+            <div class="audio-container">
+                <audio controls src="{data_url}">
+                    Your browser does not support the audio element. Please use the download button.
+                </audio>
+            </div>
+            """
+            st.markdown(audio_html, unsafe_allow_html=True)
+            logging.info(f"Displaying HTML5 audio player using Base64 data URL.")
+
+        except Exception as e:
+            st.error(f"Error embedding Base64 audio player: {e}")
+            logging.error(f"Error reading/encoding/displaying Base64 for {st.session_state.audio_full_path}: {e}", exc_info=True)
+
+
+        # Download Button - Use the *full* path to read the file server-side
+        try:
+            with open(st.session_state.audio_full_path, "rb") as file:
+                st.download_button(
+                    label="⬇️ Download Podcast (.mp3)",
+                    data=file, # Pass the file object directly for download
+                    file_name=Path(st.session_state.audio_full_path).name,
+                    mime="audio/mp3",
+                    key="download_button"
+                )
+        except Exception as e:
+            st.error(f"Error preparing download link: {e}")
+            logging.error(f"Error creating download button for {st.session_state.audio_full_path}: {e}", exc_info=True)
+
+
+    # Display message if still processing
+    elif st.session_state.is_processing:
+         st.info("⏳ Processing your request...")
+
+    # Display message if no audio generated without error
+    elif not st.session_state.is_processing and generate_button and not st.session_state.audio_full_path and not st.session_state.error_message:
+         st.warning("Processing finished, but no audio file was generated. Please check logs or try again.")
+
+    # Default message when idle
+    elif not st.session_state.is_processing and not st.session_state.audio_full_path and not st.session_state.error_message:
+        st.info("Upload files and click 'Generate Podcast' to create your audio summary.")
+
+
+    # Display Generated Script (Optional)
+    if st.session_state.podcast_script:
+        with st.expander("View Generated Podcast Script", expanded=False):
+            st.text_area("Script:", value=st.session_state.podcast_script, height=300, disabled=True, key="script_display")
+
 
 # --- Footer ---
-# Optional: Add a footer outside columns if desired
-# st.markdown("---")
-# st.markdown('<div class="info-text" style="text-align: center; font-size: 0.9rem; color: #adb5bd;">Inbox.fm - Powered by AI</div>', unsafe_allow_html=True)
+st.markdown("---")
+st.markdown('<div class="info-text" style="font-size: 0.8rem;">Inbox.fm - Powered by AI</div>', unsafe_allow_html=True)
 
+# Note: Temporary files for reading are stored in OS temp dir.
+# Audio files are stored in the AUDIO_DIR ("audio_output") subdirectory.
+# Implement cleanup logic for AUDIO_DIR in a real application.
 
