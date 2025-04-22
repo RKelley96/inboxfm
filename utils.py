@@ -86,6 +86,7 @@ def read_uploaded_files(uploaded_file_list):
             all_text.append(f"[Error processing file: {file_name}]\n\n")
 
     combined_text = "".join(all_text)
+    # Return None if the combined text is empty or only contains error markers
     return combined_text if combined_text and not combined_text.strip().startswith("[Error processing") else None
 
 
@@ -96,7 +97,7 @@ def generate_podcast_script(text_data, instructions, target_duration_minutes=Non
     Args:
         text_data (str): Concatenated text content from newsletters.
         instructions (str): User-provided instructions for style, tone, focus.
-        target_duration_minutes (int, optional): Explicitly requested duration in minutes. Defaults to None.
+        target_duration_minutes (int, optional): Explicitly requested duration (e.g., 2, 5, 10). Defaults to None.
 
     Returns:
         A string containing the generated podcast script, or None if an error occurs.
@@ -120,7 +121,7 @@ def generate_podcast_script(text_data, instructions, target_duration_minutes=Non
         )
         print(f"--- utils.py: Using explicit duration target: {target_duration_minutes} mins (~{target_word_count} words). ---")
     else:
-        # If no duration passed, provide a default guideline
+        # If no duration passed (target_duration_minutes is None), provide a default guideline
         length_instruction = "\nLENGTH GUIDELINE: Aim for a concise script, typically between 500-1000 words, as no specific duration was selected."
         print("--- utils.py: No specific duration selected, using default length guideline. ---")
     # --- End Length Control Logic ---
@@ -193,7 +194,7 @@ def generate_script_and_audio(text_data, instructions, target_duration_minutes, 
     Args:
         text_data (str): Concatenated text content from newsletters.
         instructions (str): User-provided instructions.
-        target_duration_minutes (int, optional): Explicitly requested duration.
+        target_duration_minutes (int, optional): Explicitly requested duration (e.g., 2, 5, 10).
         output_audio_path (str): The full path to save the generated MP3 audio.
         voice_name (str): The desired AI voice name.
 
@@ -229,4 +230,3 @@ def generate_script_and_audio(text_data, instructions, target_duration_minutes, 
         print("Script generation failed, skipping audio generation.")
 
     return generated_script, audio_file_path
-
