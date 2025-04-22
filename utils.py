@@ -1,343 +1,398 @@
-# utils.py
+# app.py
+import streamlit as st
 import os
 import tempfile
-import PyPDF2 # Keep import in case needed for fallback or type hinting
-import docx # python-docx library
-import traceback # For more detailed error reporting
-import re # For parsing time instructions
-from genai import GenAI # Assuming genai.py is in the same directory
+import uuid
+from pathlib import Path
+import time
+import traceback
 
-# Initialize the GenAI class (assuming it handles API key loading)
-# Handle potential errors during GenAI initialization
-jarvis = None # Initialize jarvis to None
-print("--- utils.py: Attempting to initialize GenAI instance... ---") # DEBUG PRINT
+# --- Attempt to import utility functions ---
 try:
-    # Create an instance of the GenAI class
-    jarvis = GenAI()
-    print("--- utils.py: GenAI instance (jarvis) created successfully. ---") # DEBUG PRINT
-except ValueError as e:
-    # This error likely means the API key is missing.
-    print(f"--- utils.py: CRITICAL ERROR during GenAI initialization: {e} ---") # DEBUG PRINT
-    print("--- utils.py: Ensure OPENAI_API_KEY is set in your environment or .env file. ---")
-    # jarvis remains None
-except ConnectionError as e:
-    # This error means the client failed to initialize (e.g., network issue, bad key format)
-    print(f"--- utils.py: CRITICAL CONNECTION ERROR during GenAI initialization: {e} ---") # DEBUG PRINT
-    # jarvis remains None
-except Exception as e:
-    # Catch any other unexpected errors during initialization
-    print(f"--- utils.py: An unexpected error occurred during GenAI initialization: {e} ---") # DEBUG PRINT
-    traceback.print_exc()
-    # jarvis remains None
+    if not os.path.exists("utils.py"):
+        utils_found = False
+    else:
+        from utils import read_uploaded_files, generate_script_and_audio
+        utils_found = True
+except ImportError as import_err:
+    utils_found = False
+    if os.path.exists("utils.py"):
+        def read_uploaded_files(files):
+            st.error(f"Import Error: {import_err}. Check `read_uploaded_files` in utils.py.")
+            raise NotImplementedError("`read_uploaded_files` missing/broken.")
+        def generate_script_and_audio(texts, instructions, duration, audio_path, voice):
+            st.error(f"Import Error: {import_err}. Check `generate_script_and_audio` in utils.py.")
+            raise NotImplementedError("`generate_script_and_audio` missing/broken.")
 
-# Check if initialization failed and print a clear status
-if jarvis is None:
-     print("--- utils.py: WARNING - GenAI instance (jarvis) is None. AI functionality will fail. ---") # DEBUG PRINT
+# --- Page Configuration ---
+st.set_page_config(
+    page_title="Inbox.fm Podcast Generator", # Simplified Title
+    page_icon="🎙️",
+    layout="wide"
+)
+
+# --- Custom CSS Styling (Sleeker Look) ---
+st.markdown("""
+<style>
+    /* Base & Fonts */
+    body {
+        font-family: 'Inter', sans-serif; /* Cleaner sans-serif font */
+        background-color: #f8f9fa; /* Light grey background */
+    }
+    /* Add Inter font from Google Fonts */
+    @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap)');
+
+    /* Headers */
+    .main-header {
+        font-size: 2.5rem; /* Slightly smaller */
+        font-weight: 700; /* Bold */
+        color: #212529; /* Dark grey */
+        text-align: center;
+        padding-top: 1.5rem;
+        margin-bottom: 1.5rem; /* More space below */
+    }
+    /* Removed sub-header class - simplified */
+    .section-header {
+        font-size: 1.4rem; /* Adjusted size */
+        font-weight: 600; /* Semi-bold */
+        color: #007bff; /* Primary blue */
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+        border-bottom: 2px solid #dee2e6; /* Lighter border */
+        padding-bottom: 0.4rem;
+    }
+    .info-text {
+        font-size: 0.95rem; /* Slightly smaller */
+        color: #6c757d; /* Medium grey */
+        margin-bottom: 1rem;
+        line-height: 1.6;
+    }
+
+    /* Buttons */
+    .stButton>button {
+        background-color: #007bff; /* Primary blue */
+        color: white;
+        font-weight: 500; /* Medium weight */
+        border-radius: 6px; /* Slightly less rounded */
+        padding: 0.6rem 1.2rem;
+        border: none;
+        transition: background-color 0.2s ease, transform 0.1s ease;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        width: 100%; /* Full width buttons in columns */
+        margin-top: 0.5rem; /* Consistent spacing */
+    }
+    .stButton>button:hover {
+        background-color: #0056b3; /* Darker blue */
+        box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+        transform: translateY(-1px); /* Slight lift effect */
+    }
+    .stButton>button:disabled {
+        background-color: #adb5bd; /* Grey disabled */
+        color: #e9ecef;
+        cursor: not-allowed;
+        box-shadow: none;
+        transform: none;
+    }
+    .stDownloadButton>button { /* Keep download distinct */
+        background-color: #28a745; /* Success green */
+        border-color: #28a745;
+    }
+    .stDownloadButton>button:hover {
+        background-color: #218838; /* Darker green */
+        border-color: #1e7e34;
+    }
+
+    /* Radio Buttons (for duration) */
+    div[role="radiogroup"] {
+        display: flex;
+        flex-wrap: wrap; /* Allow wrapping */
+        gap: 10px; /* Space between buttons */
+        justify-content: space-between; /* Distribute space */
+        margin-bottom: 1rem;
+    }
+    div[role="radiogroup"] label { /* Style individual radio items */
+      background-color: #e9ecef; /* Light grey background */
+      padding: 8px 15px;
+      border-radius: 6px;
+      border: 1px solid #ced4da;
+      cursor: pointer;
+      transition: background-color 0.2s ease, border-color 0.2s ease;
+      flex-grow: 1; /* Allow buttons to grow */
+      text-align: center;
+      font-weight: 500;
+      color: #495057;
+    }
+    div[role="radiogroup"] label:hover {
+      background-color: #dee2e6;
+      border-color: #adb5bd;
+    }
+    /* Style the selected radio button */
+    div[role="radiogroup"] input[type="radio"]:checked + div label{
+       background-color: #007bff; /* Blue selected */
+       color: white;
+       border-color: #0056b3;
+    }
 
 
-def _estimate_word_count(minutes, words_per_minute=150):
-    """Estimates target word count based on duration."""
-    if minutes is None or minutes <= 0:
-        return None # No specific target
-    return int(minutes * words_per_minute)
+    /* Inputs & Widgets */
+    .stTextArea textarea,
+    .stSelectbox div[data-baseweb="select"] > div {
+        border-radius: 6px;
+        border: 1px solid #ced4da; /* Standard border color */
+        background-color: #fff; /* White background */
+        font-size: 0.95rem;
+    }
+    .stFileUploader label {
+        border-radius: 6px;
+        border: 2px dashed #ced4da;
+        background-color: #f8f9fa;
+        transition: border-color 0.2s ease, background-color 0.2s ease;
+    }
+    .stFileUploader label:hover {
+        border-color: #007bff;
+        background-color: #e7f1ff; /* Light blue tint on hover */
+    }
+    .stExpander {
+        border: 1px solid #dee2e6;
+        border-radius: 6px;
+        background-color: #fff;
+        margin-top: 1rem;
+    }
+    .stExpander header {
+        font-weight: 600;
+        color: #495057; /* Darker grey */
+        font-size: 1rem;
+    }
 
-def _parse_duration_from_instructions(instructions):
-    """Attempts to parse a duration (in minutes) from user instructions."""
-    if not instructions:
-        return None
-    # Look for patterns like "X minute", "X min", "X-minute"
-    match = re.search(r'(\d+)\s*-?\s*min(ute)?s?', instructions, re.IGNORECASE)
-    if match:
+    /* Alerts */
+    .stAlert {
+        border-radius: 6px;
+        font-size: 0.9rem;
+        padding: 0.8rem 1rem;
+    }
+    .stAlert strong {
+         font-weight: 600;
+    }
+    .success-text { /* Custom success message */
+        color: #155724; /* Dark green text */
+        background-color: #d4edda; /* Light green background */
+        padding: 1rem;
+        border-radius: 6px;
+        margin: 1rem 0;
+        border-left: 5px solid #28a745; /* Green border */
+        font-weight: 500;
+    }
+
+</style>
+""", unsafe_allow_html=True)
+
+
+# --- Session State Initialization ---
+if 'temp_dir' not in st.session_state:
+    st.session_state.temp_dir = tempfile.mkdtemp(prefix=f"inboxfm_{uuid.uuid4()}_")
+if 'newsletter_text' not in st.session_state:
+    st.session_state.newsletter_text = None
+if 'podcast_script' not in st.session_state:
+    st.session_state.podcast_script = None
+if 'audio_file_path' not in st.session_state:
+    st.session_state.audio_file_path = None
+if 'is_processing' not in st.session_state:
+    st.session_state.is_processing = False
+if 'last_error' not in st.session_state:
+    st.session_state.last_error = None
+if 'session_id' not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+if 'upload_key' not in st.session_state:
+    st.session_state.upload_key = 0
+if 'selected_voice' not in st.session_state:
+    st.session_state.selected_voice = "nova"
+if 'selected_duration' not in st.session_state: # New state for duration
+    st.session_state.selected_duration = None # Default to None (auto)
+
+
+# --- Helper Functions ---
+def reset_app_state():
+    """Resets the session state variables related to a processing run."""
+    st.session_state.newsletter_text = None
+    st.session_state.podcast_script = None
+    st.session_state.audio_file_path = None
+    st.session_state.is_processing = False
+    st.session_state.last_error = None
+    st.session_state.session_id = str(uuid.uuid4())
+    st.session_state.upload_key += 1
+    st.session_state.selected_duration = None # Reset duration on start over
+    # Keep temp_dir and voice selection
+
+# --- App Header ---
+st.markdown('<div class="main-header">Inbox.fm 🎙️</div>', unsafe_allow_html=True)
+# Removed sub-header for simplicity
+
+if not utils_found:
+    st.error("🚨 **Critical Setup Error:** `utils.py` could not be found or is missing required functions. Please ensure `utils.py` and `genai.py` are in the same directory as `app.py`. Core functionality is disabled.", icon="⚙️")
+
+# --- Main Layout Columns ---
+col1, col2 = st.columns([3, 2]) # Input column slightly wider
+
+with col1:
+    # --- Step 1: Upload ---
+    st.markdown('<div class="section-header">1. Upload Newsletters</div>', unsafe_allow_html=True)
+    uploaded_files = st.file_uploader(
+        "Select .txt, .pdf, or .docx files", # Simplified label
+        type=["txt", "pdf", "docx"],
+        accept_multiple_files=True,
+        key=f"newsletter_uploader_{st.session_state.upload_key}",
+        disabled=not utils_found
+    )
+
+    # File processing logic (runs on upload)
+    if uploaded_files and st.session_state.newsletter_text is None and not st.session_state.is_processing:
+         if utils_found:
+            try:
+                with st.spinner("Reading files..."):
+                    st.session_state.last_error = None
+                    extracted_text = read_uploaded_files(uploaded_files)
+                    st.session_state.newsletter_text = extracted_text
+                    if not extracted_text:
+                         st.warning("⚠️ Could not extract text from uploaded files.")
+            except Exception as e:
+                st.error(f"Error reading files: {e}")
+                st.session_state.last_error = f"File Reading Error: {e}"
+                st.session_state.newsletter_text = None
+            # No automatic rerun needed here, state update handles UI change
+
+    # --- Step 2: Customize ---
+    st.markdown('<div class="section-header">2. Customize Podcast</div>', unsafe_allow_html=True)
+
+    # Duration Selection using Radio buttons
+    st.markdown("**Target Duration (Approximate):**")
+    duration_options = {
+        'Auto (Default)': None, # Represent 'Auto' as None
+        '~5 min': 5,
+        '~10 min': 10,
+        '~15 min': 15
+    }
+    # Get the current index based on stored duration value
+    duration_keys = list(duration_options.keys())
+    current_duration_value = st.session_state.selected_duration
+    try:
+        # Find the index corresponding to the stored value
+        current_index = list(duration_options.values()).index(current_duration_value)
+    except ValueError:
+        current_index = 0 # Default to 'Auto' if value not found
+
+    selected_duration_label = st.radio(
+        "Select Podcast Length",
+        options=duration_keys,
+        index=current_index,
+        key="duration_radio", # Widget key
+        horizontal=True,
+        label_visibility="collapsed" # Hide the "Select Podcast Length" label itself
+    )
+    # Update session state when radio button changes
+    st.session_state.selected_duration = duration_options[selected_duration_label]
+
+
+    # Voice Selection
+    st.markdown("**Voice:**")
+    voice_options = ["nova", "alloy", "echo", "fable", "onyx", "shimmer", "ash", "ballad", "coral", "sage"]
+    st.selectbox(
+        "Select AI Voice",
+        options=voice_options,
+        index=voice_options.index(st.session_state.selected_voice),
+        key="voice_selector_widget",
+        on_change=lambda: st.session_state.update(selected_voice=st.session_state.voice_selector_widget),
+        disabled=not utils_found,
+        label_visibility="collapsed" # Hide label
+    )
+
+    # Optional Instructions
+    st.markdown("**Additional Instructions (Optional):**")
+    instructions = st.text_area(
+        "Add specific style notes, topics to focus on, etc.", # Simplified label
+        placeholder="Example: Focus on the financial implications mentioned. Use an enthusiastic tone.",
+        height=100,
+        key="podcast_instructions",
+        disabled=not utils_found,
+        label_visibility="collapsed" # Hide label
+    )
+
+    # --- Reset Button (Moved to col1 for better flow) ---
+    show_reset = st.session_state.newsletter_text or st.session_state.podcast_script or st.session_state.audio_file_path or st.session_state.last_error
+    if show_reset:
+        if st.button("🔄 Clear All & Start Over", key="reset_button", use_container_width=True):
+            reset_app_state()
+            st.rerun()
+
+
+# --- Processing & Output Column ---
+with col2:
+    # --- Step 3: Generate ---
+    st.markdown('<div class="section-header">3. Generate & Listen</div>', unsafe_allow_html=True)
+
+    # Generate Button
+    can_generate = utils_found and st.session_state.newsletter_text and not st.session_state.is_processing
+    if st.button("🚀 Generate Podcast", key="generate_podcast_button", disabled=not can_generate, use_container_width=True):
+        if not st.session_state.newsletter_text:
+            st.warning("Please upload newsletter files first.")
+        else:
+            current_instructions = st.session_state.get("podcast_instructions", "")
+            st.session_state.is_processing = True
+            st.session_state.last_error = None
+            st.session_state.podcast_script = None
+            st.session_state.audio_file_path = None
+            st.rerun()
+
+    # --- Display Area ---
+    if st.session_state.is_processing:
+        # Show spinner centrally in the column
+        with st.spinner("Generating podcast... This may take several moments..."):
+            # The actual processing happens on the *next* rerun after setting is_processing=True
+            # This block just shows the spinner while is_processing is True
+            st.empty() # Placeholder to show spinner
+
+    # Display Error if it occurred
+    if st.session_state.last_error and not st.session_state.is_processing:
+        st.error(f"⚠️ **Error:** {st.session_state.last_error}")
+
+    # Display Audio Player & Download if successful
+    if st.session_state.audio_file_path and os.path.exists(st.session_state.audio_file_path) and not st.session_state.is_processing:
+        st.markdown('<div class="success-text">✅ Your podcast is ready!</div>', unsafe_allow_html=True)
         try:
-            minutes = int(match.group(1))
-            print(f"--- utils.py: Parsed duration request: {minutes} minutes ---")
-            return minutes
-        except (ValueError, IndexError):
-            return None
-    return None
+             with open(st.session_state.audio_file_path, "rb") as audio_file:
+                 audio_bytes = audio_file.read()
+             st.audio(audio_bytes, format="audio/mp3")
 
-
-def read_uploaded_files(uploaded_file_list):
-    """
-    Reads a list of Streamlit UploadedFile objects, extracts text content
-    from supported file types (.txt, .pdf, .docx).
-
-    Args:
-        uploaded_file_list: A list of Streamlit UploadedFile objects.
-
-    Returns:
-        A single string containing the concatenated text from all readable files,
-        or None if no files were provided or readable.
-    """
-    all_text = []
-    if not uploaded_file_list:
-        print("--- utils.py: No files provided to read_uploaded_files. ---")
-        return None
-
-    print(f"--- utils.py: Starting processing of {len(uploaded_file_list)} uploaded files. ---")
-    # Process each file directly using file-like object methods where possible
-    for uploaded_file in uploaded_file_list:
-        file_text = None
-        file_name = uploaded_file.name
-        print(f"--- utils.py: Processing file: {file_name} ---")
-        try:
-            # Determine file type and read content
-            file_extension = os.path.splitext(file_name)[1].lower()
-
-            if file_extension == ".txt":
-                # Read as bytes first, then decode with error handling
-                print(f"--- utils.py: Reading {file_name} as TXT ---")
-                raw_bytes = uploaded_file.getvalue()
-                try:
-                    file_text = raw_bytes.decode('utf-8')
-                except UnicodeDecodeError:
-                    print(f"--- utils.py: Warning - UTF-8 decoding failed for {file_name}. Trying 'latin-1'. ---")
-                    try:
-                       file_text = raw_bytes.decode('latin-1') # Common fallback
-                    except Exception as decode_err:
-                       print(f"--- utils.py: Error decoding {file_name} with fallback: {decode_err} ---")
-                       file_text = "[Could not decode TXT file content]"
-
-
-            elif file_extension == ".pdf":
-                print(f"--- utils.py: Reading {file_name} as PDF ---")
-                # Use the read_pdf method from GenAI instance if available
-                if jarvis and hasattr(jarvis, 'read_pdf'):
-                     # Pass the file-like object directly
-                     file_text = jarvis.read_pdf(uploaded_file)
-                     if not file_text: # Check if read_pdf returned empty string due to error
-                          print(f"--- utils.py: Warning - Failed to extract text from PDF: {file_name} ---")
-                          file_text = f"[No text extracted from PDF: {file_name}]" # Add placeholder
-                else:
-                     print(f"--- utils.py: Warning - Cannot read PDF '{file_name}' - GenAI instance or read_pdf method unavailable. ---")
-                     file_text = f"[PDF reading unavailable for: {file_name}]"
-
-
-            elif file_extension == ".docx":
-                print(f"--- utils.py: Reading {file_name} as DOCX ---")
-                 # Use the read_docx method from GenAI instance if available
-                if jarvis and hasattr(jarvis, 'read_docx'):
-                     # Pass the file-like object directly
-                     file_text = jarvis.read_docx(uploaded_file)
-                     if not file_text: # Check if read_docx returned empty string due to error
-                          print(f"--- utils.py: Warning - Failed to extract text from DOCX: {file_name} ---")
-                          file_text = f"[No text extracted from DOCX: {file_name}]" # Add placeholder
-                else:
-                    print(f"--- utils.py: Warning - Cannot read DOCX '{file_name}' - GenAI instance or read_docx method unavailable. ---")
-                    file_text = f"[DOCX reading unavailable for: {file_name}]"
-
-            else:
-                print(f"--- utils.py: Warning - Unsupported file type skipped: {file_name} ---")
-                file_text = f"[Unsupported file type: {file_name}]"
-
-            # Add extracted text (or error placeholder) to the list
-            # Only add if text was actually extracted, ignore placeholders unless debugging
-            if file_text and not file_text.startswith("["):
-                all_text.append(f"--- Content from {file_name} ---\n{file_text}\n--- End of {file_name} ---\n\n")
-            elif file_text: # Include placeholders if needed for debugging counts etc.
-                 print(f"--- utils.py: Placeholder added for {file_name}: {file_text} ---")
-                 # all_text.append(file_text + "\n\n") # Uncomment to include placeholders in output
-
+             st.download_button(
+                 label="⬇️ Download Podcast (.mp3)",
+                 data=audio_bytes,
+                 file_name=f"Inbox.fm_Podcast_{time.strftime('%Y%m%d_%H%M%S')}.mp3",
+                 mime="audio/mp3",
+                 key="download_button",
+                 use_container_width=True
+             )
+        except FileNotFoundError:
+             st.error("Error: Could not find generated audio file.")
+             st.session_state.audio_file_path = None
+             st.session_state.last_error = "Audio file missing after generation."
+             # No acknowledge button here, error is shown, user can retry or reset
         except Exception as e:
-            print(f"--- utils.py: Error processing file {file_name}: {e} ---")
-            traceback.print_exc() # Print detailed traceback for debugging
-            # Add a marker indicating which file failed
-            all_text.append(f"[Error processing file: {file_name}]\n\n")
+             st.error(f"Error preparing audio: {e}")
+             st.session_state.audio_file_path = None
+             st.session_state.last_error = f"Audio display/download error: {e}"
 
-    # Combine all extracted texts
-    print(f"--- utils.py: Finished processing {len(uploaded_file_list)} files. ---")
-    combined_text = "".join(all_text)
-    # Return None if the combined text is empty or only contains error messages/placeholders
-    return combined_text if combined_text and not combined_text.strip().startswith("[") else None
+    # Display Script Expander if script exists (even if audio failed)
+    if st.session_state.podcast_script and not st.session_state.is_processing:
+         with st.expander("📄 View Generated Script", expanded=False):
+              st.text_area("Script:", value=st.session_state.podcast_script, height=300, key="script_display", disabled=True)
 
-
-def generate_podcast_script(text_data, instructions):
-    """
-    Generates a podcast script using the GenAI class based on provided text
-    data and user instructions, attempting to adhere to length requests.
-
-    Args:
-        text_data (str): Concatenated text content from newsletters.
-        instructions (str): User-provided instructions for style, tone, focus, length.
-
-    Returns:
-        A string containing the generated podcast script, or None if an error occurs.
-    Raises:
-        ConnectionError: If the GenAI instance is not available (e.g., API key issue).
-        Exception: Propagates exceptions from the AI generation call.
-    """
-    print("--- utils.py: Entering generate_podcast_script function. ---") # DEBUG PRINT
-    if not jarvis:
-        print("--- utils.py: ERROR - GenAI (jarvis) not initialized in generate_podcast_script. ---")
-        raise ConnectionError("AI service connection not established. Check API key and initialization.")
-
-    if not text_data:
-        print("--- utils.py: ERROR - No text data provided to generate_podcast_script. ---")
-        return None # Return None if input text is empty
-
-    # --- Length Control Logic ---
-    target_minutes = _parse_duration_from_instructions(instructions)
-    target_word_count = _estimate_word_count(target_minutes)
-    length_instruction = ""
-    if target_word_count:
-        # Be very specific about the word count target
-        length_instruction = (
-            f"\nIMPORTANT LENGTH CONSTRAINT: The final script MUST be approximately {target_word_count} words long "
-            f"(which corresponds to roughly {target_minutes} minutes of speaking time at a normal pace). "
-            "Adhere closely to this word count."
-        )
-        print(f"--- utils.py: Adding length instruction: target ~{target_word_count} words. ---")
-    else:
-        # Provide a default guideline if no specific time was requested
-        length_instruction = "\nLENGTH GUIDELINE: Aim for a concise script, typically between 500-1000 words, unless user instructions specify otherwise."
-        print("--- utils.py: No specific duration found, using default length guideline. ---")
-    # --- End Length Control Logic ---
+    # Initial guidance message
+    if not st.session_state.podcast_script and not st.session_state.audio_file_path and not st.session_state.is_processing and not st.session_state.last_error:
+         st.info("Upload files and click 'Generate Podcast' to begin." if utils_found else "⚙️ Application setup incomplete.")
 
 
-    # Construct a more detailed prompt for the AI
-    system_prompt = f"""
-You are an expert podcast scriptwriter creating a personalized audio digest called 'Inbox.fm'.
-Your target audience is busy, intellectually curious millennial knowledge workers (25-40) in fields like finance, VC, and tech. They use newsletters (like Axios Pro, The Information, a16z, Stratechery) to stay competitive.
-Your task is to synthesize the key insights from the provided newsletter content into a coherent, engaging podcast script.
+# --- Footer ---
+# Optional: Add a footer outside columns if desired
+# st.markdown("---")
+# st.markdown('<div class="info-text" style="text-align: center; font-size: 0.9rem; color: #adb5bd;">Inbox.fm - Powered by AI</div>', unsafe_allow_html=True)
 
-Follow these user instructions carefully:
-'{instructions}'
-{length_instruction}
-
-Additional guidelines:
-- Focus on summarizing key content and drawing meaningful connections across the provided sources.
-- Aim for depth and retention, not just surface-level skimming.
-- The tone should be professional yet conversational and engaging for audio.
-- Structure the output clearly as a script. Start with a brief intro, synthesize the main points, and end with a brief outro. Use clear paragraph breaks.
-- Do NOT just list summaries; synthesize the information into a narrative.
-- Ensure the final script flows well and makes sense when read aloud.
-- Avoid overly technical jargon unless the user instructions specify otherwise.
-- Do not include any markdown formatting like ```, **, or lists using '*' or '-' in the final script. Output plain text suitable for text-to-speech.
-"""
-
-    # The user prompt will be the combined text data
-    user_prompt = text_data
-    print("--- utils.py: Attempting to generate podcast script via jarvis.generate_text... ---")
-
-    try:
-        # Call the text generation method from the GenAI instance
-        script = jarvis.generate_text(
-            prompt=user_prompt,
-            instructions=system_prompt,
-            model="gpt-4o-mini", # Consider gpt-4o for potentially better synthesis/length control
-            temperature=0.6,    # Slightly lower temperature for more focused synthesis
-            max_tokens=3000     # Increase max tokens slightly to allow for longer content if needed
-        )
-        if script:
-             print("--- utils.py: Podcast script generated successfully by jarvis. ---")
-             # Optional: Log word count of generated script for comparison
-             # print(f"--- utils.py: Generated script word count: {len(script.split())} ---")
-        else:
-             print("--- utils.py: Warning - AI script generation returned None from jarvis. ---")
-        return script # Returns the script string or None if GenAI.generate_text failed
-    except Exception as e:
-        print(f"--- utils.py: Error in generate_podcast_script calling jarvis.generate_text: {e} ---")
-        traceback.print_exc()
-        raise e # Re-raise the exception so app.py can catch it
-
-
-def generate_podcast_audio(script, output_path, voice_name):
-    """
-    Generates an audio file from the podcast script using the GenAI class.
-    (This function remains largely the same but will be called by the new combined function)
-
-    Args:
-        script (str): The generated podcast script text.
-        output_path (str): The file path to save the generated MP3 audio.
-        voice_name (str): The desired AI voice name (e.g., 'nova').
-
-    Returns:
-        bool: True if audio generation was successful, False otherwise.
-    Raises:
-        ConnectionError: If the GenAI instance is not available.
-        Exception: Propagates exceptions from the audio generation call.
-    """
-    print("--- utils.py: Entering generate_podcast_audio function. ---") # DEBUG PRINT
-    if not jarvis:
-        print("--- utils.py: ERROR - GenAI (jarvis) not initialized in generate_podcast_audio. ---")
-        raise ConnectionError("AI service connection not established. Check API key and initialization.")
-
-    if not script:
-        print("--- utils.py: ERROR - No script provided to generate_podcast_audio. ---")
-        return False # Cannot generate audio from empty script
-
-    print(f"--- utils.py: Attempting to generate podcast audio via jarvis.generate_audio using voice '{voice_name}'... ---")
-    try:
-        # Call the audio generation method from the GenAI instance
-        success = jarvis.generate_audio(
-            text=script,
-            file_path=output_path,
-            voice=voice_name,
-            model='tts-1', # Standard quality TTS model - 'tts-1-hd' is higher quality but slower/more expensive
-            speed=1.0      # Default speed, could be made configurable in app.py later
-        )
-        if success:
-            print("--- utils.py: Podcast audio generated successfully by jarvis. ---")
-        else:
-            print("--- utils.py: Error - AI audio generation failed (jarvis.generate_audio returned False). ---")
-        return success # Returns True or False based on jarvis.generate_audio result
-    except Exception as e:
-        print(f"--- utils.py: Error in generate_podcast_audio calling jarvis.generate_audio: {e} ---")
-        traceback.print_exc()
-        # Decide whether to return False or re-raise
-        raise e # Re-raise if app.py should handle it explicitly
-        # return False # Indicate failure
-
-def generate_script_and_audio(text_data, instructions, output_audio_path, voice_name):
-    """
-    Generates both the podcast script and the audio file in sequence.
-
-    Args:
-        text_data (str): Concatenated text content from newsletters.
-        instructions (str): User-provided instructions.
-        output_audio_path (str): The full path to save the generated MP3 audio.
-        voice_name (str): The desired AI voice name.
-
-    Returns:
-        tuple: (generated_script, audio_file_path)
-               - generated_script (str): The text of the script, or None if script generation failed.
-               - audio_file_path (str): The path to the saved audio file if successful, or None otherwise.
-               Returns (None, None) if script generation fails.
-    Raises:
-        ConnectionError: If the GenAI instance is not available.
-        Exception: Propagates exceptions from the underlying generation calls.
-    """
-    print(f"--- utils.py: Starting combined script and audio generation for voice '{voice_name}' ---")
-    generated_script = None
-    audio_file_path = None
-
-    # Step 1: Generate Script
-    try:
-        generated_script = generate_podcast_script(text_data, instructions)
-    except Exception as script_err:
-        print(f"--- utils.py: Error during script generation step: {script_err} ---")
-        # Re-raise the exception to be caught by app.py
-        raise script_err
-
-    # Step 2: Generate Audio ONLY if script generation was successful
-    if generated_script:
-        try:
-            audio_success = generate_podcast_audio(generated_script, output_audio_path, voice_name)
-            if audio_success and os.path.exists(output_audio_path):
-                audio_file_path = output_audio_path
-                print(f"--- utils.py: Combined generation successful. Audio at: {audio_file_path} ---")
-            else:
-                print("--- utils.py: Audio generation step failed or file not found. ---")
-                # Keep generated_script, but audio_file_path remains None
-        except Exception as audio_err:
-            print(f"--- utils.py: Error during audio generation step: {audio_err} ---")
-            # Keep generated_script, but audio_file_path remains None
-            # Optionally re-raise or handle differently
-            # raise audio_err # Uncomment to propagate audio-specific errors strongly
-            pass # Allow returning the script even if audio fails
-
-    else:
-        print("--- utils.py: Script generation failed, skipping audio generation. ---")
-
-    return generated_script, audio_file_path
 
